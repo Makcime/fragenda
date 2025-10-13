@@ -602,6 +602,17 @@ def _chromium_print_pdf(chromium_cmd: str, html_path: Path, pdf_path: Path, time
                     elif resp.get("id") == nav_id and "error" in resp:
                         raise RuntimeError(f"Chromium navigation failed: {resp['error']}")
 
+            # give Chromium a moment to finish layout/fonts
+            wait_id = send(
+                "Runtime.evaluate",
+                {
+                    "expression": "new Promise(resolve => setTimeout(resolve, 400))",
+                    "awaitPromise": True,
+                },
+                session=session_id,
+            )
+            _ = wait_for_response(wait_id)
+
             pdf_id = send(
                 "Page.printToPDF",
                 {
