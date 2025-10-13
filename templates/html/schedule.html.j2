@@ -5,7 +5,8 @@
     <title>{{ title }}</title>
     <style>
       @page {
-        margin: 1.2cm;
+        size: A4 landscape;
+        margin: 1cm;
       }
 
       body {
@@ -13,6 +14,10 @@
         color: #1f2933;
         margin: 0;
         font-size: 12px;
+      }
+
+      body {
+        background: #f8fafc;
       }
 
       header {
@@ -38,6 +43,10 @@
         width: 100%;
         border-collapse: collapse;
         table-layout: fixed;
+        background: #fff;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
       }
 
       table.schedule thead th {
@@ -59,9 +68,9 @@
 
       table.schedule tbody td {
         border: 1px solid #e0e7ef;
-        padding: 4px 6px;
+        padding: 0;
         vertical-align: top;
-        min-height: 70px;
+        min-height: 72px;
       }
 
       table.schedule tbody td.empty {
@@ -69,6 +78,7 @@
         color: #9aa5b1;
         text-align: center;
         font-style: italic;
+        padding: 8px 6px;
       }
 
       .slot-label {
@@ -82,14 +92,32 @@
         font-size: 12px;
       }
 
-      .entry {
-        border-left: 3px solid #3f83f8;
-        padding-left: 6px;
-        margin-bottom: 6px;
+      .cell-entries {
+        display: grid;
+        gap: 6px;
+        padding: 6px 6px 8px;
       }
 
-      .entry:last-child {
-        margin-bottom: 0;
+      .cell-entries.layout-single {
+        grid-template-columns: 1fr;
+      }
+
+      .cell-entries.layout-stack {
+        grid-template-columns: 1fr;
+      }
+
+      .cell-entries.layout-week-split {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .entry {
+        border-left: 3px solid #3f83f8;
+        padding: 4px 6px;
+        background: #f8fafc;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        min-height: 60px;
       }
 
       .entry.shared {
@@ -127,7 +155,7 @@
         display: block;
         font-size: 10px;
         color: #7b8794;
-        margin-top: 2px;
+        margin-top: auto;
       }
 
       footer {
@@ -164,45 +192,52 @@
               <span class="slot-interval">{{ row.interval }}</span>
             </th>
             {% for cell in row.cells %}
+              {% set cell_class = 'layout-' ~ cell.layout %}
               <td class="{{ 'empty' if cell.is_empty }}">
                 {% if cell.is_empty %}
                   &mdash;
                 {% else %}
-                  {% for entry in cell.entries %}
-                    <div class="entry {{ 'shared' if entry.is_shared }}">
-                      <span class="week">Semaine {{ entry.week }}</span>
-                      <span class="course">{{ entry.course }}</span>
-                      {% set class_list = entry.class_display %}
-                      {% set teacher_list = entry.teacher_display %}
-                      {% set room_value = entry.room %}
-                      {% if scope == 'pro' %}
-                        <span class="meta">Local: {{ room_value or '—' }}</span>
-                        {% if class_list %}
-                          <span class="detail">Classes: {{ class_list }}</span>
+                  <div class="cell-entries {{ cell_class }}">
+                    {% for entry in cell.entries %}
+                      <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}">
+                        {% if entry.week != 'AB' %}
+                          <span class="week">Semaine {{ entry.week }}</span>
                         {% endif %}
-                      {% elif scope == 'classe' %}
-                        {% if teacher_list %}
-                          <span class="meta">Profs: {{ teacher_list }}</span>
+                        <span class="course">{{ entry.course }}</span>
+                        {% set class_list = entry.class_display %}
+                        {% set teacher_list = entry.teacher_display %}
+                        {% set room_value = entry.room_display %}
+                        {% if scope == 'pro' %}
+                          {% if class_list %}
+                            <span class="meta">{{ class_list }}</span>
+                          {% endif %}
+                          {% if entry.has_room and room_value %}
+                            <span class="detail">{{ room_value }}</span>
+                          {% endif %}
+                        {% elif scope == 'classe' %}
+                          {% if entry.has_teachers %}
+                            <span class="meta">{{ teacher_list }}</span>
+                          {% endif %}
+                          {% if entry.has_room and room_value %}
+                            <span class="detail">{{ room_value }}</span>
+                          {% endif %}
+                        {% else %}
+                          {% if class_list %}
+                            <span class="meta">{{ class_list }}</span>
+                          {% endif %}
+                          {% if entry.has_teachers %}
+                            <span class="detail">{{ teacher_list }}</span>
+                          {% endif %}
+                          {% if entry.has_room and room_value and not class_list and not entry.has_teachers %}
+                            <span class="meta">{{ room_value }}</span>
+                          {% endif %}
                         {% endif %}
-                        {% if room_value %}
-                          <span class="detail">Local: {{ room_value }}</span>
+                        {% if entry.has_codes %}
+                          <span class="code">{{ entry.code_display }}</span>
                         {% endif %}
-                      {% else %}
-                        {% if class_list %}
-                          <span class="meta">Classes: {{ class_list }}</span>
-                        {% endif %}
-                        {% if teacher_list %}
-                          <span class="detail">Profs: {{ teacher_list }}</span>
-                        {% endif %}
-                        {% if not class_list and not teacher_list and room_value %}
-                          <span class="meta">Local: {{ room_value }}</span>
-                        {% endif %}
-                      {% endif %}
-                      {% if entry.has_codes %}
-                        <span class="code">Codes: {{ entry.code_display }}</span>
-                      {% endif %}
-                    </div>
-                  {% endfor %}
+                      </div>
+                    {% endfor %}
+                  </div>
                 {% endif %}
               </td>
             {% endfor %}

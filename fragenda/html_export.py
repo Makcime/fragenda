@@ -40,7 +40,7 @@ _ensure_pydyf_compat()
 
 
 PLAGE_NORMALIZATION = {"P00": "P0", "P01": "P1"}
-SLOT_ORDER = ["P0", "P1", "P2", "P3", "P4", "P5"]
+SLOT_ORDER = ["P0", "P1", "P2", "P25", "P3", "P4", "P5"]
 
 
 def _clean_value(value) -> str:
@@ -63,6 +63,17 @@ def _unique_ordered(values: Iterable[str]) -> List[str]:
         if text not in seen:
             seen.append(text)
     return seen
+
+
+def _prettify_teacher(value: str) -> str:
+    if not value:
+        return ""
+    text = value.replace(".", " ").replace("_", " ").strip()
+    if not text:
+        return ""
+    parts = [part for part in text.split() if part]
+    pretty = " ".join(part.capitalize() for part in parts)
+    return pretty or value
 
 
 def make_build_str(semver: str, stamp: datetime | None = None) -> str:
@@ -138,6 +149,18 @@ class SlotEntry:
     def room_display(self) -> str:
         return self.room or "—"
 
+    @property
+    def has_teachers(self) -> bool:
+        return bool(self.teachers)
+
+    @property
+    def has_classes(self) -> bool:
+        return bool(self.classes)
+
+    @property
+    def has_room(self) -> bool:
+        return bool(self.room)
+
 
 @dataclass(frozen=True)
 class SlotCell:
@@ -146,6 +169,19 @@ class SlotCell:
     @property
     def is_empty(self) -> bool:
         return len(self.entries) == 0
+
+    @property
+    def layout(self) -> str:
+        if self.is_empty:
+            return "empty"
+        if len(self.entries) == 1:
+            return "single"
+        weeks = {entry.week for entry in self.entries}
+        if weeks <= {"A", "B"} and len(weeks) > 1:
+            return "week-split"
+        if weeks == {"AB"}:
+            return "single"
+        return "stack"
 
 
 @dataclass(frozen=True)
@@ -203,7 +239,7 @@ def _build_slot_entries(day_rows: pd.DataFrame) -> List[SlotEntry]:
     entries: List[SlotEntry] = []
     for week, course, room in key_order:
         mask = (week_series == week) & (course_series == course) & (room_series == room)
-        teachers = _unique_ordered(teacher_series[mask].tolist())
+        teachers = [_prettify_teacher(t) for t in _unique_ordered(teacher_series[mask].tolist())]
         classes = _unique_ordered(class_series[mask].tolist())
         codes = _unique_ordered(code_series[mask].tolist())
 
