@@ -5,6 +5,7 @@ import inspect
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -68,6 +69,8 @@ DEFAULT_DAY_LABELS: dict[int, str] = {
     5: "Vendredi",
     6: "Samedi",
 }
+SOFT_HYPHEN = "\u00AD"
+WORD_BREAK_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]{8,}")
 WEEK_ORDER = {"A": 0, "B": 1, "AB": 2}
 
 
@@ -91,6 +94,15 @@ def _unique_ordered(values: Iterable[str]) -> List[str]:
         if text not in seen:
             seen.append(text)
     return seen
+
+
+def _soft_break_text(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        word = match.group(0)
+        chunks = [word[i:i + 6] for i in range(0, len(word), 6)]
+        return SOFT_HYPHEN.join(chunks)
+
+    return WORD_BREAK_RE.sub(repl, text)
 
 
 def _prettify_teacher(value: str) -> str:
@@ -277,7 +289,7 @@ def _build_slot_entries(day_rows: pd.DataFrame, *, base_class: str | None = None
     entries: List[SlotEntry] = []
     for week, course, room in key_order:
         mask = (week_series == week) & (course_series == course) & (room_series == room)
-        teachers = [_prettify_teacher(t) for t in _unique_ordered(teacher_series[mask].tolist())]
+        teachers = [_soft_break_text(_prettify_teacher(t)) for t in _unique_ordered(teacher_series[mask].tolist())]
         classes = _unique_ordered(class_series[mask].tolist())
         codes = _unique_ordered(code_series[mask].tolist())
         is_option = False
@@ -285,13 +297,18 @@ def _build_slot_entries(day_rows: pd.DataFrame, *, base_class: str | None = None
             normalized_codes = {normalize_code_to_class(code) for code in codes if code}
             is_option = any(code != normalized_base for code in normalized_codes)
 
+        classes = [_soft_break_text(cls) for cls in classes]
+        codes = [_soft_break_text(code) for code in codes]
+        course_text = _soft_break_text(course or "")
+        room_text = _soft_break_text(room or "")
+
         entries.append(
             SlotEntry(
                 week=week or "AB",
-                course=course or "",
+                course=course_text,
                 teachers=teachers,
                 classes=classes,
-                room=room or "",
+                room=room_text,
                 codes=codes,
                 is_option=is_option,
             )
