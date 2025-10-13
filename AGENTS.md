@@ -4,7 +4,7 @@
 The core Python package lives in `fragenda/`; extend modules inside rather than creating ad-hoc scripts. Data inputs stay in `input/` and downstream artifacts in `output/`. Reusable HTML or template assets belong in `templates/`. Notebooks used for exploration reside in `notebooks/`—sync key insights back into the package. Tests go in `tests/`, mirroring the package layout. The `splitpages.sh` utility handles PDF splitting; keep shell helpers in the repository root.
 
 ## Build, Test, and Development Commands
-Run `poetry install` to sync dependencies. Use `poetry shell` for an activated environment or prefix commands with `poetry run`. Execute the automated suite via `poetry run pytest`. Open exploratory notebooks with `poetry run jupyter lab`. Use `bash splitpages.sh path/to/file.pdf` to fan out PDF inputs into named pages.
+Run `poetry install` to sync dependencies. Use `poetry shell` for an activated environment or prefix commands with `poetry run`. Execute the automated suite via `poetry run pytest`. Open exploratory notebooks with `poetry run jupyter lab`. Use `bash splitpages.sh path/to/file.pdf` to fan out PDF inputs into named pages. Before committing any notebook you have edited, clear its outputs with `jupyter nbconvert --clear-output --inplace */*ipynb`.
 
 ## Coding Style & Naming Conventions
 Target Python 3.10 and follow PEP 8 with 4-space indentation. Prefer dataclasses or TypedDicts for structured records, and annotate functions with types. Module names stay lowercase with underscores (for example, `schedule_parser.py`), while public classes use CapWords and non-exported helpers start with `_`. Keep notebooks numbered (`notebook-v#.ipynb`) and avoid camelCase files.
