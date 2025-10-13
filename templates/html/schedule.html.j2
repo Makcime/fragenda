@@ -215,7 +215,7 @@
       @media screen {
         body {
           background: #ffffff;
-          padding: 24px;
+          padding: 32px;
         }
 
         table.schedule {
@@ -240,7 +240,7 @@
     {% macro render_entry(entry, scope) -%}
       <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}{% if scope == 'classe' and entry.is_option %} option{% endif %}">
         {% if entry.week != 'AB' %}
-          <span class="week">Semaine {{ entry.week }}</span>
+          <span class="week">{{ entry.week }}</span>
         {% endif %}
         <span class="course">{{ entry.course }}</span>
         {% set class_list = entry.class_display %}
