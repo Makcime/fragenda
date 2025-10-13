@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import inspect
 import math
 import os
@@ -11,6 +12,7 @@ from typing import Dict, Iterable, List, Sequence
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
+from tqdm.auto import tqdm
 
 
 def _ensure_pydyf_compat() -> None:
@@ -58,6 +60,7 @@ DEFAULT_DAY_LABELS: dict[int, str] = {
     5: "Vendredi",
     6: "Samedi",
 }
+WEEK_ORDER = {"A": 0, "B": 1, "AB": 2}
 
 
 def _clean_value(value) -> str:
@@ -192,14 +195,12 @@ class SlotCell:
     def layout(self) -> str:
         if self.is_empty:
             return "empty"
-        if len(self.entries) == 1:
-            return "single"
-        weeks = {entry.week for entry in self.entries}
-        if weeks <= {"A", "B"} and len(weeks) > 1:
+        weeks = {entry.week for entry in self.entries if entry.week}
+        if any(week in {"A", "B"} for week in weeks):
             return "week-split"
-        if weeks == {"AB"}:
-            return "single"
-        return "stack"
+        if len(self.entries) > 1:
+            return "stack"
+        return "single"
 
 
 @dataclass(frozen=True)
@@ -288,6 +289,7 @@ def _build_slot_entries(day_rows: pd.DataFrame, *, base_class: str | None = None
             )
         )
 
+    entries.sort(key=lambda entry: (WEEK_ORDER.get(entry.week, 99), entry.course, entry.room))
     return entries
 
 
@@ -330,9 +332,10 @@ def _prepare_matrix(
     source_slots = rows["plage_norm"] if "plage_norm" in rows else rows.get("plage", pd.Series(dtype=object))
     present_slots = {normalize_plage(value) for value in source_slots.dropna()}
 
+    ensure_set = {normalize_plage(slot) for slot in ensure_slots}
     ordered_slots: List[str] = []
     for slot in SLOT_ORDER:
-        if slot in DEFAULT_REQUIRED_SLOTS or slot in present_slots:
+        if slot in ensure_set or slot in present_slots:
             ordered_slots.append(slot)
     additional_slots = sorted(present_slots - set(SLOT_ORDER))
     ordered_slots.extend(additional_slots)
@@ -450,7 +453,7 @@ def build_class_contexts(df: pd.DataFrame, semver: str, include_general: bool = 
         for code in targets:
             if code == classe:
                 subset = rows[rows["code_main"] == classe]
-                label = f"{classe} — classe entière"
+                label = classe
             else:
                 if include_general:
                     subset = rows[
@@ -474,6 +477,8 @@ def build_group_contexts(df: pd.DataFrame, scope: str, semver: str) -> List[Dict
         if pd.isna(value):
             continue
         label = str(value).strip()
+        if scope == "pro":
+            label = _prettify_teacher(label)
         contexts.append(_base_group_context(label, rows, scope=scope, semver=semver))
     return contexts
 
@@ -483,6 +488,9 @@ def render_contexts_to_pdfs(
     template_dir: Path,
     template_name: str,
     output_dir: Path,
+    *,
+    progress_desc: str | None = None,
+    export_html: bool = True,
 ) -> List[Path]:
     env = Environment(
         loader=FileSystemLoader(str(template_dir)),
@@ -499,12 +507,43 @@ def render_contexts_to_pdfs(
     os.environ.setdefault("TMPDIR", str(tmp_dir))
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    for context in contexts:
+    context_list = list(contexts)
+    iterator = (
+        tqdm(
+            context_list,
+            desc=progress_desc or "Rendering PDFs",
+            unit="pdf",
+        )
+        if context_list
+        else context_list
+    )
+
+    logo_path = (template_dir.parent / "Logo Ecole .jpg").resolve()
+    logo_data_uri = ""
+    if logo_path.exists():
+        mime = "image/jpeg"
+        if logo_path.suffix.lower() in {".png"}:
+            mime = "image/png"
+        elif logo_path.suffix.lower() in {".gif"}:
+            mime = "image/gif"
+        encoded = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+        logo_data_uri = f"data:{mime};base64,{encoded}"
+
+    html_dir = output_dir / "html" if export_html else None
+    if html_dir:
+        html_dir.mkdir(parents=True, exist_ok=True)
+
+    for context in iterator:
+        render_context = dict(context)
+        render_context.setdefault("logo_src", logo_data_uri)
         safe_name = context["title"].replace("/", "-").replace(" ", "_")
         pdf_path = output_dir / f"{safe_name}.pdf"
-        html_string = template.render(context)
+        html_string = template.render(render_context)
         HTML(string=html_string, base_url=str(template_dir)).write_pdf(str(pdf_path))
         pdf_paths.append(pdf_path)
+        if html_dir:
+            html_path = html_dir / f"{safe_name}.html"
+            html_path.write_text(html_string, encoding="utf-8")
 
     return pdf_paths
 
@@ -518,7 +557,13 @@ def generate_class_pdfs(
     include_general: bool = True,
 ) -> List[Path]:
     contexts = build_class_contexts(dataframe, semver=semver, include_general=include_general)
-    return render_contexts_to_pdfs(contexts, template_dir, template_name, output_dir)
+    return render_contexts_to_pdfs(
+        contexts,
+        template_dir,
+        template_name,
+        output_dir,
+        progress_desc="Classes",
+    )
 
 
 def generate_scope_pdfs(
@@ -530,4 +575,15 @@ def generate_scope_pdfs(
     output_dir: Path,
 ) -> List[Path]:
     contexts = build_group_contexts(dataframe, scope=scope, semver=semver)
-    return render_contexts_to_pdfs(contexts, template_dir, template_name, output_dir)
+    desc_lookup = {
+        "classe": "Classes",
+        "pro": "Pros",
+        "local": "Locaux",
+    }
+    return render_contexts_to_pdfs(
+        contexts,
+        template_dir,
+        template_name,
+        output_dir,
+        progress_desc=desc_lookup.get(scope, scope.capitalize()),
+    )

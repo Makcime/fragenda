@@ -2,11 +2,12 @@
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title }}</title>
     <style>
       @page {
         size: A4 landscape;
-        margin: 1cm;
+        margin: 1.2cm 2.0cm;
       }
 
       body {
@@ -21,22 +22,28 @@
       }
 
       header {
+        position: relative;
         display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        margin-bottom: 1rem;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1.2rem;
+        min-height: 72px;
       }
 
       header h1 {
-        font-size: 20px;
+        font-size: 22px;
         margin: 0;
         letter-spacing: 0.5px;
+        text-align: center;
+        white-space: nowrap;
+        color: #0f172a;
       }
 
-      header .meta {
-        text-align: right;
-        font-size: 11px;
-        color: #52606d;
+      .brand-logo {
+        position: absolute;
+        left: 0;
+        height: 68px;
+        width: auto;
       }
 
       table.schedule {
@@ -55,6 +62,11 @@
         padding: 6px 4px;
         font-weight: 600;
         border: 1px solid #c5d1dc;
+        text-align: center;
+      }
+
+      table.schedule thead th:first-child {
+        text-align: left;
       }
 
       table.schedule tbody th {
@@ -107,7 +119,29 @@
       }
 
       .cell-entries.layout-week-split {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        display: flex;
+        gap: 6px;
+        align-items: stretch;
+      }
+
+      .week-column {
+        display: flex;
+        flex: 1 1 0;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .week-column.week-a {
+        order: 1;
+      }
+
+      .week-column.week-b {
+        order: 2;
+      }
+
+      .week-column.week-ab {
+        flex: 1 1 100%;
+        order: 3;
       }
 
       .entry {
@@ -178,6 +212,23 @@
         margin-top: auto;
       }
 
+      @media screen {
+        body {
+          background: #ffffff;
+          padding: 24px;
+        }
+
+        table.schedule {
+          margin: 0 auto;
+          box-shadow: none;
+          border-radius: 12px;
+        }
+
+        header {
+          margin-bottom: 24px;
+        }
+      }
+
       footer {
         margin-top: 18px;
         text-align: right;
@@ -185,14 +236,51 @@
         color: #7b8794;
       }
     </style>
+
+    {% macro render_entry(entry, scope) -%}
+      <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}{% if scope == 'classe' and entry.is_option %} option{% endif %}">
+        {% if entry.week != 'AB' %}
+          <span class="week">Semaine {{ entry.week }}</span>
+        {% endif %}
+        <span class="course">{{ entry.course }}</span>
+        {% set class_list = entry.class_display %}
+        {% set teacher_list = entry.teacher_display %}
+        {% set room_value = entry.room_display %}
+        {% if scope == 'pro' %}
+          {% if class_list %}
+            <span class="meta">{{ class_list }}</span>
+          {% endif %}
+          {% if entry.has_room and room_value and room_value != '—' %}
+            <span class="detail">{{ room_value }}</span>
+          {% endif %}
+        {% elif scope == 'classe' %}
+          {% if entry.has_teachers %}
+            <span class="meta">{{ teacher_list }}</span>
+          {% endif %}
+          {% if entry.has_room and room_value and room_value != '—' %}
+            <span class="detail">{{ room_value }}</span>
+          {% endif %}
+        {% else %}
+          {% if class_list %}
+            <span class="meta">{{ class_list }}</span>
+          {% endif %}
+          {% if entry.has_teachers %}
+            <span class="detail">{{ teacher_list }}</span>
+          {% endif %}
+          {% if entry.has_room and room_value and room_value != '—' and not class_list and not entry.has_teachers %}
+            <span class="meta">{{ room_value }}</span>
+          {% endif %}
+        {% endif %}
+        {% if entry.has_codes %}
+          <span class="code">{{ entry.code_display }}</span>
+        {% endif %}
+      </div>
+    {%- endmacro %}
   </head>
   <body>
     <header>
+      <img src="{{ logo_src }}" alt="Logo de l'école" class="brand-logo" />
       <h1>{{ title }}</h1>
-      <div class="meta">
-        <div>{{ scope|capitalize }}</div>
-        <div>Généré le {{ generated_on.strftime("%d/%m/%Y à %H:%M") }}</div>
-      </div>
     </header>
 
     <table class="schedule">
@@ -217,47 +305,34 @@
                 {% if cell.is_empty %}
                   &mdash;
                 {% else %}
-                  <div class="cell-entries {{ cell_class }}">
-                    {% for entry in cell.entries %}
-                      <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}{% if scope == 'classe' and entry.is_option %} option{% endif %}">
-                        {% if entry.week != 'AB' %}
-                          <span class="week">Semaine {{ entry.week }}</span>
-                        {% endif %}
-                        <span class="course">{{ entry.course }}</span>
-                        {% set class_list = entry.class_display %}
-                        {% set teacher_list = entry.teacher_display %}
-                        {% set room_value = entry.room_display %}
-                        {% if scope == 'pro' %}
-                          {% if class_list %}
-                            <span class="meta">{{ class_list }}</span>
-                          {% endif %}
-                          {% if entry.has_room and room_value and room_value != '—' %}
-                            <span class="detail">{{ room_value }}</span>
-                          {% endif %}
-                        {% elif scope == 'classe' %}
-                          {% if entry.has_teachers %}
-                            <span class="meta">{{ teacher_list }}</span>
-                          {% endif %}
-                          {% if entry.has_room and room_value and room_value != '—' %}
-                            <span class="detail">{{ room_value }}</span>
-                          {% endif %}
-                        {% else %}
-                          {% if class_list %}
-                            <span class="meta">{{ class_list }}</span>
-                          {% endif %}
-                          {% if entry.has_teachers %}
-                            <span class="detail">{{ teacher_list }}</span>
-                          {% endif %}
-                          {% if entry.has_room and room_value and room_value != '—' and not class_list and not entry.has_teachers %}
-                            <span class="meta">{{ room_value }}</span>
-                          {% endif %}
-                        {% endif %}
-                        {% if entry.has_codes %}
-                          <span class="code">{{ entry.code_display }}</span>
-                        {% endif %}
+                  {% if cell.layout == 'week-split' %}
+                    {% set week_a = cell.entries | selectattr('week', 'equalto', 'A') | list %}
+                    {% set week_b = cell.entries | selectattr('week', 'equalto', 'B') | list %}
+                    {% set week_ab = cell.entries | selectattr('week', 'equalto', 'AB') | list %}
+                    <div class="cell-entries layout-week-split">
+                      <div class="week-column week-a">
+                        {% for entry in week_a %}
+                          {{ render_entry(entry, scope) }}
+                        {% endfor %}
                       </div>
-                    {% endfor %}
-                  </div>
+                      <div class="week-column week-b">
+                        {% for entry in week_b %}
+                          {{ render_entry(entry, scope) }}
+                        {% endfor %}
+                      </div>
+                      {% for entry in week_ab %}
+                        <div class="week-column week-ab">
+                          {{ render_entry(entry, scope) }}
+                        </div>
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    <div class="cell-entries {{ cell_class }}">
+                      {% for entry in cell.entries %}
+                        {{ render_entry(entry, scope) }}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
                 {% endif %}
               </td>
             {% endfor %}
