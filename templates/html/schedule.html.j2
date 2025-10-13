@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }}</title>
+    <style>
+      @page {
+        margin: 1.2cm;
+      }
+
+      body {
+        font-family: "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        color: #1f2933;
+        margin: 0;
+        font-size: 12px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 1rem;
+      }
+
+      header h1 {
+        font-size: 20px;
+        margin: 0;
+        letter-spacing: 0.5px;
+      }
+
+      header .meta {
+        text-align: right;
+        font-size: 11px;
+        color: #52606d;
+      }
+
+      table.schedule {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      table.schedule thead th {
+        background-color: #dde7f0;
+        color: #273447;
+        padding: 6px 4px;
+        font-weight: 600;
+        border: 1px solid #c5d1dc;
+      }
+
+      table.schedule tbody th {
+        width: 16%;
+        padding: 6px 4px;
+        text-align: left;
+        border: 1px solid #d1d9e0;
+        background-color: #eef3f7;
+        font-weight: 600;
+      }
+
+      table.schedule tbody td {
+        border: 1px solid #e0e7ef;
+        padding: 4px 6px;
+        vertical-align: top;
+        min-height: 70px;
+      }
+
+      table.schedule tbody td.empty {
+        background-color: #f7f9fc;
+        color: #9aa5b1;
+        text-align: center;
+        font-style: italic;
+      }
+
+      .slot-label {
+        display: block;
+        font-size: 11px;
+        color: #52606d;
+      }
+
+      .slot-interval {
+        display: block;
+        font-size: 12px;
+      }
+
+      .entry {
+        border-left: 3px solid #3f83f8;
+        padding-left: 6px;
+        margin-bottom: 6px;
+      }
+
+      .entry:last-child {
+        margin-bottom: 0;
+      }
+
+      .entry.shared {
+        border-color: #0e9f6e;
+      }
+
+      .entry .week {
+        font-weight: 600;
+        font-size: 11px;
+        color: #0c4a6e;
+        letter-spacing: 0.3px;
+      }
+
+      .entry .course {
+        display: block;
+        font-weight: 600;
+        font-size: 12px;
+        margin-top: 1px;
+      }
+
+      .entry .meta {
+        display: block;
+        font-size: 11px;
+        color: #52606d;
+      }
+
+      .entry .detail {
+        display: block;
+        font-size: 10.5px;
+        color: #616e7c;
+        margin-top: 1px;
+      }
+
+      .entry .code {
+        display: block;
+        font-size: 10px;
+        color: #7b8794;
+        margin-top: 2px;
+      }
+
+      footer {
+        margin-top: 18px;
+        text-align: right;
+        font-size: 10px;
+        color: #7b8794;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>{{ title }}</h1>
+      <div class="meta">
+        <div>{{ scope|capitalize }}</div>
+        <div>Généré le {{ generated_on.strftime("%d/%m/%Y à %H:%M") }}</div>
+      </div>
+    </header>
+
+    <table class="schedule">
+      <thead>
+        <tr>
+          <th>Plage</th>
+          {% for label in day_labels %}
+            <th>{{ label }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in slot_rows %}
+          <tr>
+            <th>
+              <span class="slot-label">{{ row.label }}</span>
+              <span class="slot-interval">{{ row.interval }}</span>
+            </th>
+            {% for cell in row.cells %}
+              <td class="{{ 'empty' if cell.is_empty }}">
+                {% if cell.is_empty %}
+                  &mdash;
+                {% else %}
+                  {% for entry in cell.entries %}
+                    <div class="entry {{ 'shared' if entry.is_shared }}">
+                      <span class="week">Semaine {{ entry.week }}</span>
+                      <span class="course">{{ entry.course }}</span>
+                      {% set class_list = entry.class_display %}
+                      {% set teacher_list = entry.teacher_display %}
+                      {% set room_value = entry.room %}
+                      {% if scope == 'pro' %}
+                        <span class="meta">Local: {{ room_value or '—' }}</span>
+                        {% if class_list %}
+                          <span class="detail">Classes: {{ class_list }}</span>
+                        {% endif %}
+                      {% elif scope == 'classe' %}
+                        {% if teacher_list %}
+                          <span class="meta">Profs: {{ teacher_list }}</span>
+                        {% endif %}
+                        {% if room_value %}
+                          <span class="detail">Local: {{ room_value }}</span>
+                        {% endif %}
+                      {% else %}
+                        {% if class_list %}
+                          <span class="meta">Classes: {{ class_list }}</span>
+                        {% endif %}
+                        {% if teacher_list %}
+                          <span class="detail">Profs: {{ teacher_list }}</span>
+                        {% endif %}
+                        {% if not class_list and not teacher_list and room_value %}
+                          <span class="meta">Local: {{ room_value }}</span>
+                        {% endif %}
+                      {% endif %}
+                      {% if entry.has_codes %}
+                        <span class="code">Codes: {{ entry.code_display }}</span>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <footer>{{ build_str }}</footer>
+  </body>
+</html>
