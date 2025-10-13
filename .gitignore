@@ -1,2 +1,22 @@
 input/
 output/
+fragenda/.ipynb_checkpoints/
+fragenda/__pycache__/
+notebooks/.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+#.tox and virtualenvs
+.tox/
+.venv/
+venv/
+ENV/
+
+# pytest
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
