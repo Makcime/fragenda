@@ -120,8 +120,28 @@
         min-height: 60px;
       }
 
+      .entry.week-a:not(.option) {
+        border-color: #2563eb;
+        background: #eff6ff;
+      }
+
+      .entry.week-b:not(.option) {
+        border-color: #ec4899;
+        background: #fdf2f8;
+      }
+
       .entry.shared {
         border-color: #0e9f6e;
+      }
+
+      .entry.week-ab:not(.option) {
+        border-color: #0e9f6e;
+        background: #ecfdf5;
+      }
+
+      .entry.option {
+        border-color: #fb923c;
+        background: #fff7ed;
       }
 
       .entry .week {
@@ -199,7 +219,7 @@
                 {% else %}
                   <div class="cell-entries {{ cell_class }}">
                     {% for entry in cell.entries %}
-                      <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}">
+                      <div class="entry {{ 'shared' if entry.is_shared }} week-{{ entry.week|lower }}{% if scope == 'classe' and entry.is_option %} option{% endif %}">
                         {% if entry.week != 'AB' %}
                           <span class="week">Semaine {{ entry.week }}</span>
                         {% endif %}
@@ -211,14 +231,14 @@
                           {% if class_list %}
                             <span class="meta">{{ class_list }}</span>
                           {% endif %}
-                          {% if entry.has_room and room_value %}
+                          {% if entry.has_room and room_value and room_value != '—' %}
                             <span class="detail">{{ room_value }}</span>
                           {% endif %}
                         {% elif scope == 'classe' %}
                           {% if entry.has_teachers %}
                             <span class="meta">{{ teacher_list }}</span>
                           {% endif %}
-                          {% if entry.has_room and room_value %}
+                          {% if entry.has_room and room_value and room_value != '—' %}
                             <span class="detail">{{ room_value }}</span>
                           {% endif %}
                         {% else %}
@@ -228,7 +248,7 @@
                           {% if entry.has_teachers %}
                             <span class="detail">{{ teacher_list }}</span>
                           {% endif %}
-                          {% if entry.has_room and room_value and not class_list and not entry.has_teachers %}
+                          {% if entry.has_room and room_value and room_value != '—' and not class_list and not entry.has_teachers %}
                             <span class="meta">{{ room_value }}</span>
                           {% endif %}
                         {% endif %}

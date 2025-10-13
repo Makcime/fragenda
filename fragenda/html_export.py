@@ -41,6 +41,23 @@ _ensure_pydyf_compat()
 
 PLAGE_NORMALIZATION = {"P00": "P0", "P01": "P1"}
 SLOT_ORDER = ["P0", "P1", "P2", "P25", "P3", "P4", "P5"]
+DEFAULT_REQUIRED_SLOTS: tuple[str, ...] = ("P1", "P2", "P3", "P4")
+DEFAULT_SLOT_INTERVALS: dict[str, tuple[str, str]] = {
+    "P0": ("08h00", "08h45"),
+    "P1": ("08h45", "10h15"),
+    "P2": ("10h30", "12h00"),
+    "P25": ("12h00", "12h45"),
+    "P3": ("13h15", "14h45"),
+    "P4": ("15h00", "16h30"),
+}
+DEFAULT_DAY_LABELS: dict[int, str] = {
+    1: "Lundi",
+    2: "Mardi",
+    3: "Mercredi",
+    4: "Jeudi",
+    5: "Vendredi",
+    6: "Samedi",
+}
 
 
 def _clean_value(value) -> str:
@@ -124,6 +141,7 @@ class SlotEntry:
     classes: Sequence[str]
     room: str
     codes: Sequence[str]
+    is_option: bool = False
 
     @property
     def is_shared(self) -> bool:
@@ -201,15 +219,25 @@ def _sorted_slots(values: Iterable[str]) -> List[str]:
     return sorted(seen, key=lambda s: order.get(s, len(order)))
 
 
-def _collect_day_labels(rows: pd.DataFrame) -> Dict[int, str]:
+def _collect_day_labels(rows: pd.DataFrame, ensure_days: Sequence[int] | None = None) -> Dict[int, str]:
     labels: Dict[int, str] = {}
+    if ensure_days:
+        for day in ensure_days:
+            labels[int(day)] = DEFAULT_DAY_LABELS.get(int(day), f"Jour {int(day)}")
+
     for day_num, chunk in rows.groupby("#day"):
-        name = chunk["day"].dropna().iloc[0] if not chunk["day"].dropna().empty else str(day_num)
-        labels[int(day_num)] = name
+        if pd.isna(day_num):
+            continue
+        name_series = chunk["day"].dropna()
+        if not name_series.empty:
+            name = str(name_series.iloc[0]).strip()
+        else:
+            name = DEFAULT_DAY_LABELS.get(int(day_num), str(int(day_num)))
+        labels[int(day_num)] = name or DEFAULT_DAY_LABELS.get(int(day_num), str(int(day_num)))
     return labels
 
 
-def _build_slot_entries(day_rows: pd.DataFrame) -> List[SlotEntry]:
+def _build_slot_entries(day_rows: pd.DataFrame, *, base_class: str | None = None) -> List[SlotEntry]:
     if day_rows.empty:
         return []
 
@@ -236,12 +264,17 @@ def _build_slot_entries(day_rows: pd.DataFrame) -> List[SlotEntry]:
         if key not in key_order:
             key_order.append(key)
 
+    normalized_base = normalize_code_to_class(base_class) if base_class else None
     entries: List[SlotEntry] = []
     for week, course, room in key_order:
         mask = (week_series == week) & (course_series == course) & (room_series == room)
         teachers = [_prettify_teacher(t) for t in _unique_ordered(teacher_series[mask].tolist())]
         classes = _unique_ordered(class_series[mask].tolist())
         codes = _unique_ordered(code_series[mask].tolist())
+        is_option = False
+        if normalized_base:
+            normalized_codes = {normalize_code_to_class(code) for code in codes if code}
+            is_option = any(code != normalized_base for code in normalized_codes)
 
         entries.append(
             SlotEntry(
@@ -251,38 +284,138 @@ def _build_slot_entries(day_rows: pd.DataFrame) -> List[SlotEntry]:
                 classes=classes,
                 room=room or "",
                 codes=codes,
+                is_option=is_option,
             )
         )
 
     return entries
 
 
-def _prepare_matrix(rows: pd.DataFrame) -> Dict[str, List[SlotRow]]:
-    day_labels = _collect_day_labels(rows)
-    day_order = sorted(day_labels.keys())
-    slot_order = _sorted_slots(rows["plage"])
+def _resolve_interval(slot: str, slot_rows: pd.DataFrame, slot_times: Dict[str, tuple[str, str]]) -> str:
+    start_val = ""
+    end_val = ""
+    if not slot_rows.empty:
+        start_series = slot_rows["start"].dropna()
+        end_series = slot_rows["end"].dropna()
+        if not start_series.empty:
+            start_val = _clean_value(start_series.iloc[0])
+        if not end_series.empty:
+            end_val = _clean_value(end_series.iloc[0])
+    if not start_val and not end_val:
+        start_val, end_val = slot_times.get(slot, DEFAULT_SLOT_INTERVALS.get(slot, ("", "")))
+    interval_parts = [part for part in (start_val, end_val) if part]
+    return " - ".join(interval_parts)
 
-    matrix: List[SlotRow] = []
-    for slot in slot_order:
-        slot_rows = rows[rows["plage_norm"] == slot]
-        start = slot_rows["start"].dropna().iloc[0] if not slot_rows["start"].dropna().empty else ""
-        end = slot_rows["end"].dropna().iloc[0] if not slot_rows["end"].dropna().empty else ""
-        interval = " - ".join(filter(None, (_format_time(start), _format_time(end))))
+
+def _prepare_matrix(
+    rows: pd.DataFrame,
+    *,
+    scope: str,
+    base_class: str | None = None,
+    ensure_slots: Sequence[str] = DEFAULT_REQUIRED_SLOTS,
+    ensure_days: Sequence[int] | None = None,
+) -> Dict[str, List[SlotRow]]:
+    day_labels = _collect_day_labels(rows, ensure_days)
+    day_order = sorted(day_labels.keys())
+
+    slot_times: Dict[str, tuple[str, str]] = {}
+    if "plage_norm" in rows and "start" in rows and "end" in rows:
+        for _, record in rows[["plage_norm", "start", "end"]].dropna(subset=["plage_norm"]).iterrows():
+            slot = record["plage_norm"]
+            start = _clean_value(record["start"])
+            end = _clean_value(record["end"])
+            if slot not in slot_times and (start or end):
+                slot_times[slot] = (start, end)
+
+    source_slots = rows["plage_norm"] if "plage_norm" in rows else rows.get("plage", pd.Series(dtype=object))
+    present_slots = {normalize_plage(value) for value in source_slots.dropna()}
+
+    ordered_slots: List[str] = []
+    for slot in SLOT_ORDER:
+        if slot in DEFAULT_REQUIRED_SLOTS or slot in present_slots:
+            ordered_slots.append(slot)
+    additional_slots = sorted(present_slots - set(SLOT_ORDER))
+    ordered_slots.extend(additional_slots)
+
+    matrix_rows: List[SlotRow] = []
+
+    for slot in ordered_slots:
+        slot_rows = rows[rows["plage_norm"] == slot] if "plage_norm" in rows else rows[rows["plage"] == slot]
+        interval = _resolve_interval(slot, slot_rows, slot_times)
 
         cells: List[SlotCell] = []
         for day in day_order:
-            day_rows = slot_rows[slot_rows["#day"] == day]
-            entries = _build_slot_entries(day_rows)
-            cells.append(SlotCell(entries=entries))
+            if "plage_norm" in rows:
+                day_rows = rows[(rows["plage_norm"] == slot) & (rows["#day"] == day)]
+            else:
+                day_rows = rows[(rows["plage"] == slot) & (rows["#day"] == day)]
+            entries = _build_slot_entries(day_rows, base_class=base_class if scope == "classe" else None)
+            cells.append(SlotCell(entries=tuple(entries)))
 
-        label = slot
-        matrix.append(SlotRow(label=label, interval=interval, cells=cells))
+        matrix_rows.append(SlotRow(label=slot, interval=interval, cells=tuple(cells)))
 
-    return {"day_order": day_order, "day_labels": day_labels, "rows": matrix}
+    if scope == "pro" and day_order:
+        friday_index = day_order.index(5) if 5 in day_order else None
+        concertation_applied = False
+        updated_rows: List[SlotRow] = []
+        for row in matrix_rows:
+            if row.label == "P4" and friday_index is not None:
+                cells = list(row.cells)
+                entries = list(cells[friday_index].entries)
+                if not any((entry.course or "").strip().lower() == "concertation" for entry in entries):
+                    entries.append(
+                        SlotEntry(
+                            week="AB",
+                            course="Concertation",
+                            teachers=(),
+                            classes=(),
+                            room="",
+                            codes=(),
+                            is_option=False,
+                        )
+                    )
+                cells[friday_index] = SlotCell(entries=tuple(entries))
+                updated_rows.append(SlotRow(label=row.label, interval=row.interval, cells=tuple(cells)))
+                concertation_applied = True
+            else:
+                updated_rows.append(row)
+        if not concertation_applied and friday_index is not None:
+            empty_cells = [SlotCell(entries=tuple()) for _ in day_order]
+            entries = [
+                SlotEntry(
+                    week="AB",
+                    course="Concertation",
+                    teachers=(),
+                    classes=(),
+                    room="",
+                    codes=(),
+                    is_option=False,
+                )
+            ]
+            empty_cells[friday_index] = SlotCell(entries=tuple(entries))
+            interval = _resolve_interval("P4", pd.DataFrame(columns=rows.columns), slot_times)
+            updated_rows.append(SlotRow(label="P4", interval=interval, cells=tuple(empty_cells)))
+        matrix_rows = updated_rows
+
+    return {"day_order": day_order, "day_labels": day_labels, "rows": matrix_rows}
 
 
-def _base_group_context(group_name: str, rows: pd.DataFrame, scope: str, semver: str) -> Dict:
-    matrix = _prepare_matrix(rows)
+def _base_group_context(
+    group_name: str,
+    rows: pd.DataFrame,
+    scope: str,
+    semver: str,
+    *,
+    base_class: str | None = None,
+) -> Dict:
+    ensure_days = tuple(range(1, 6)) if scope == "pro" else None
+    matrix = _prepare_matrix(
+        rows,
+        scope=scope,
+        base_class=base_class,
+        ensure_slots=DEFAULT_REQUIRED_SLOTS,
+        ensure_days=ensure_days,
+    )
     return {
         "title": group_name,
         "scope": scope,
@@ -328,7 +461,9 @@ def build_class_contexts(df: pd.DataFrame, semver: str, include_general: bool = 
                 label = f"{classe} — {code}"
             if subset.empty:
                 continue
-            contexts.append(_base_group_context(label, subset, scope="classe", semver=semver))
+            contexts.append(
+                _base_group_context(label, subset, scope="classe", semver=semver, base_class=classe)
+            )
     return contexts
 
 
