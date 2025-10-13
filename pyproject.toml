@@ -16,6 +16,7 @@ uno = "^0.3.3"
 jinja2 = "^3.1.4"
 pydyf = "^0.11.0"
 weasyprint = "^61.2"
+tqdm = "^4.67.1"
 
 
 [build-system]
