@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Include general-class rows when emitting subgroup sheets (classe scope only).",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=("weasyprint", "wkhtmltopdf", "chromium"),
+        default="weasyprint",
+        help="Rendering backend used for PDF generation.",
+    )
     return parser.parse_args()
 
 
@@ -77,6 +83,7 @@ def main() -> None:
             template_name=args.template.name,
             output_dir=args.output_dir,
             include_general=args.include_general,
+            renderer=args.renderer,
         )
     else:
         generate_scope_pdfs(
@@ -86,6 +93,7 @@ def main() -> None:
             template_dir=args.template_root,
             template_name=args.template.name,
             output_dir=args.output_dir,
+            renderer=args.renderer,
         )
 
 

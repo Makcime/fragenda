@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import base64
 import inspect
+import json
 import math
 import os
+import shutil
+import subprocess
+import tempfile
+import time as pytime
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, time
 from pathlib import Path
@@ -11,8 +18,9 @@ from typing import Dict, Iterable, List, Sequence
 
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from weasyprint import HTML
 from tqdm.auto import tqdm
+from weasyprint import HTML
+import websocket
 
 
 def _ensure_pydyf_compat() -> None:
@@ -483,6 +491,143 @@ def build_group_contexts(df: pd.DataFrame, scope: str, semver: str) -> List[Dict
     return contexts
 
 
+VALID_RENDERERS = {"weasyprint", "wkhtmltopdf", "chromium"}
+
+
+def _chromium_print_pdf(chromium_cmd: str, html_path: Path, pdf_path: Path, timeout: float = 45.0) -> None:
+    user_data = tempfile.mkdtemp(prefix="chromium-print-")
+    proc = None
+    try:
+        cmd = [
+            chromium_cmd,
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            f"--user-data-dir={user_data}",
+            "--remote-debugging-port=0",
+            "--remote-allow-origins=*",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        ws_url = None
+        start = pytime.time()
+        assert proc.stderr is not None
+        while pytime.time() - start < timeout:
+            line = proc.stderr.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                pytime.sleep(0.05)
+                continue
+            if "DevTools listening on" in line:
+                ws_url = line.split("DevTools listening on", 1)[-1].strip()
+                break
+
+        if not ws_url:
+            raise RuntimeError("Chromium did not expose a DevTools endpoint")
+
+        parsed = urllib.parse.urlparse(ws_url)
+        version_url = f"http://{parsed.netloc}/json/version"
+        version_info = json.load(urllib.request.urlopen(version_url))
+        browser_ws = websocket.create_connection(version_info["webSocketDebuggerUrl"], timeout=timeout)
+        base_http = f"http://{parsed.netloc}"
+        html_uri = html_path.resolve().as_uri()
+
+        try:
+            message_id = 0
+
+            def send(method: str, params: Dict | None = None, session: str | None = None) -> int:
+                nonlocal message_id
+                message_id += 1
+                payload = {
+                    "id": message_id,
+                    "method": method,
+                    "params": params or {},
+                }
+                if session:
+                    payload["sessionId"] = session
+                browser_ws.send(json.dumps(payload))
+                return message_id
+
+            def recv() -> Dict:
+                return json.loads(browser_ws.recv())
+
+            def wait_for_response(command_id: int) -> Dict:
+                while True:
+                    resp = recv()
+                    if resp.get("id") == command_id:
+                        return resp
+
+            create_id = send("Target.createTarget", {"url": "about:blank"})
+            create_result = wait_for_response(create_id)["result"]
+            target_id = create_result["targetId"]
+
+            attach_id = send("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+            attach_result = wait_for_response(attach_id)["result"]
+            session_id = attach_result["sessionId"]
+
+            send("Target.activateTarget", {"targetId": target_id})
+            send("Page.enable", session=session_id)
+
+            nav_id = send("Page.navigate", {"url": html_uri}, session=session_id)
+
+            loaded = False
+            while not loaded:
+                resp = recv()
+                if resp.get("sessionId") == session_id:
+                    if resp.get("method") in {"Page.loadEventFired", "Page.frameStoppedLoading"}:
+                        loaded = True
+                    elif resp.get("id") == nav_id and "error" in resp:
+                        raise RuntimeError(f"Chromium navigation failed: {resp['error']}")
+
+            pdf_id = send(
+                "Page.printToPDF",
+                {
+                    "printBackground": True,
+                    "displayHeaderFooter": False,
+                    "landscape": True,
+                    "paperWidth": 11.69,
+                    "paperHeight": 8.27,
+                    "marginTop": 0.4,
+                    "marginBottom": 0.4,
+                    "marginLeft": 0.5,
+                    "marginRight": 0.5,
+                },
+                session=session_id,
+            )
+
+            pdf_data = None
+            while pdf_data is None:
+                resp = recv()
+                if resp.get("id") == pdf_id:
+                    if "error" in resp:
+                        raise RuntimeError(f"Chromium print failed: {resp['error']}")
+                    pdf_data = resp["result"]["data"]
+
+            pdf_path.write_bytes(base64.b64decode(pdf_data))
+
+            send("Target.closeTarget", {"targetId": target_id})
+
+        finally:
+            try:
+                browser_ws.close()
+            except Exception:
+                pass
+    finally:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        shutil.rmtree(user_data, ignore_errors=True)
+
+
 def render_contexts_to_pdfs(
     contexts: Sequence[Dict],
     template_dir: Path,
@@ -491,6 +636,7 @@ def render_contexts_to_pdfs(
     *,
     progress_desc: str | None = None,
     export_html: bool = True,
+    renderer: str = "weasyprint",
 ) -> List[Path]:
     env = Environment(
         loader=FileSystemLoader(str(template_dir)),
@@ -499,6 +645,10 @@ def render_contexts_to_pdfs(
         lstrip_blocks=True,
     )
     template = env.get_template(template_name)
+
+    renderer = (renderer or "weasyprint").lower()
+    if renderer not in VALID_RENDERERS:
+        raise ValueError(f"Unsupported renderer '{renderer}'")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     pdf_paths: List[Path] = []
@@ -511,8 +661,8 @@ def render_contexts_to_pdfs(
     iterator = (
         tqdm(
             context_list,
-            desc=progress_desc or "Rendering PDFs",
-            unit="pdf",
+            desc=progress_desc or "Rendering",
+            unit="doc",
         )
         if context_list
         else context_list
@@ -529,9 +679,36 @@ def render_contexts_to_pdfs(
         encoded = base64.b64encode(logo_path.read_bytes()).decode("ascii")
         logo_data_uri = f"data:{mime};base64,{encoded}"
 
-    html_dir = output_dir / "html" if export_html else None
+    need_html_files = export_html or renderer in {"wkhtmltopdf", "chromium"}
+    html_dir = output_dir / "html" if need_html_files else None
     if html_dir:
         html_dir.mkdir(parents=True, exist_ok=True)
+
+    wkhtml_command = None
+    if renderer == "wkhtmltopdf":
+        wkhtml_command = shutil.which("wkhtmltopdf")
+        if not wkhtml_command:
+            raise RuntimeError("wkhtmltopdf binary not found. Install it or switch renderer back to weasyprint.")
+
+    chromium_command = None
+    if renderer == "chromium":
+        for candidate in (
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+            "chromium-headless-shell",
+        ):
+            path = shutil.which(candidate)
+            if path:
+                chromium_command = path
+                break
+        if not chromium_command:
+            raise RuntimeError(
+                "Chromium/Chrome executable not found. Install Google Chrome or Chromium and retry, "
+                "or choose a different renderer."
+            )
 
     for context in iterator:
         render_context = dict(context)
@@ -539,11 +716,49 @@ def render_contexts_to_pdfs(
         safe_name = context["title"].replace("/", "-").replace(" ", "_")
         pdf_path = output_dir / f"{safe_name}.pdf"
         html_string = template.render(render_context)
-        HTML(string=html_string, base_url=str(template_dir)).write_pdf(str(pdf_path))
-        pdf_paths.append(pdf_path)
+
+        html_path: Path | None = None
         if html_dir:
             html_path = html_dir / f"{safe_name}.html"
             html_path.write_text(html_string, encoding="utf-8")
+
+        if renderer == "weasyprint":
+            HTML(string=html_string, base_url=str(template_dir)).write_pdf(str(pdf_path))
+        elif renderer == "wkhtmltopdf":
+            if not html_path:
+                html_path = tmp_dir / f"{safe_name}.html"
+                html_path.write_text(html_string, encoding="utf-8")
+            cmd = [
+                wkhtml_command,
+                "--encoding",
+                "utf-8",
+                "--orientation",
+                "Landscape",
+                "--margin-top",
+                "10mm",
+                "--margin-bottom",
+                "10mm",
+                "--margin-left",
+                "12mm",
+                "--margin-right",
+                "12mm",
+                "--viewport-size",
+                "1600x1000",
+                "--dpi",
+                "150",
+                "--zoom",
+                "1.35",
+                str(html_path),
+                str(pdf_path),
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:  # chromium
+            if not html_path:
+                html_path = tmp_dir / f"{safe_name}.html"
+                html_path.write_text(html_string, encoding="utf-8")
+            _chromium_print_pdf(chromium_command, html_path, pdf_path)
+
+        pdf_paths.append(pdf_path)
 
     return pdf_paths
 
@@ -555,6 +770,7 @@ def generate_class_pdfs(
     template_name: str,
     output_dir: Path,
     include_general: bool = True,
+    renderer: str = "weasyprint",
 ) -> List[Path]:
     contexts = build_class_contexts(dataframe, semver=semver, include_general=include_general)
     return render_contexts_to_pdfs(
@@ -563,6 +779,7 @@ def generate_class_pdfs(
         template_name,
         output_dir,
         progress_desc="Classes",
+        renderer=renderer,
     )
 
 
@@ -573,6 +790,7 @@ def generate_scope_pdfs(
     template_dir: Path,
     template_name: str,
     output_dir: Path,
+    renderer: str = "weasyprint",
 ) -> List[Path]:
     contexts = build_group_contexts(dataframe, scope=scope, semver=semver)
     desc_lookup = {
@@ -586,4 +804,5 @@ def generate_scope_pdfs(
         template_name,
         output_dir,
         progress_desc=desc_lookup.get(scope, scope.capitalize()),
+        renderer=renderer,
     )
